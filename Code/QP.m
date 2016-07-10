@@ -8,11 +8,11 @@ warning off;
 
 xmin = -10;
 xmax = 10;
-for iter = 1:10
+%for iter = 1:10
 
 x=zeros(1,3);
-startX  = xmin + rand(1) * (xmax-xmin); %8.0;
-startY  = xmin + rand(1) * (xmax-xmin); %-9.0;
+startX  = 6.0; %xmin + rand(1) * (xmax-xmin); %8.0;
+startY  = -4.0; %xmin + rand(1) * (xmax-xmin); %-9.0;
 phi     = 0;
 goalX   = -3;
 goalY   = -1;
@@ -32,8 +32,8 @@ ny   = startY;
 nt   = phi;
 
 x(1)=sqrt(startX^2+startY^2);
-x(3)=wrapToPi(pi-atan2(startY,startX)) + phi;
-x(2)=wrapToPi(-phi+ x(3));
+x(3)=wrapToPi(pi - atan2(startY,startX) + phi) ;
+x(2)=wrapToPi(- phi+ x(3));
 
 %% Plot the start and the end state
 r=0.5;
@@ -55,8 +55,6 @@ R       = [x(1)];
 X       = [startX];
 Y       = [startY];
 Theta   = [];
-k1      = 1;
-k2      = 1;
 Q       = diag([1, 0.1]);
 delta   = [];
 U1      = [];
@@ -66,15 +64,20 @@ Slk2    = [];
 NX      = [nx];
 NY      = [ny];
 k1      = 1;
-k2      = 5;
+k2      = 1;
 
 
 %% Iterate over to find the optimal control
-for i = 1:400
+for i = 1:1800
+if x(1) < 1e-1
+    break;
+end
 
+tic();
 cvx_begin quiet
-        variable u(4);
-        minimize( u.' * u );
+        cvx_solver sedumi
+        variable u(6);
+        minimize( u(1:4).' * u(1:4) + 10 * u(6) + 1 * u(5));
         subject to
             % Lyapunov function used:
             % V    = 0.5 * (r^2 + theta^2)
@@ -82,30 +85,45 @@ cvx_begin quiet
             % Vdot = r*r_dot + theta*theta_dot
             %      = -r*v*cos(arctan(-k1*theta)) + (v/r) * theta *
             %      sin(arctan(-k1 * theta)
+            
+            %-(x(1)) * u(1) * cos(atan(-k1*x(2))) <= ...
+            %    0.5 * u(6) * ((x(1))^2 ) + u(3);
 
             -(x(1)) * u(1) * cos(atan(-k1*x(2))) + (x(2)) * u(1)/x(1) * sin(atan(-k1*x(2))) <= ...
-                -0.5 * 2.0 * ((x(1))^2 + (x(2))^2) + u(3);
-            z = x(3) - atan(-x(2));
-            ((1 + 1/ (1 + x(2)^2) ) * u(1) / x(1) * sin(z + atan(-x(2))) + u(2)) == ...
-                -0.5 * u(1)/ x(1) * z  + u(4);
+                0.5 * u(6) * ((x(1))^2 + (x(2))^2) + u(3);
+            u(6) <= 0.0;
+
+            % Define the obstacle in egocentric view:
+            % hdot = 1/h * ((sin(x(2)) * x(1) - b_y) + cos(x(2)) * (cos(x(2)*x + b_x)) ) 
             
-            u(2) <= 0.2;
-            u(2) >= -0.2;
+            b_x     = -1.42;
+            b_y     = -2.16;
+            h       = sqrt( (-x(1)*cos(x(2)) - b_x) ^2 + (x(1) * sin(x(2)) - b_y) ^2);
+            if (h < 0.8)
+                hdot    = 1/h * (x(1) - b_y * sin(x(2)) + b_x * cos(x(2))) * -u(1) * cos(x(3)) + ...
+                    -1/h * x(1) * (b_x * sin(x(2)) + b_y * cos(x(2)) ) * u(1)/x(1) * sin(x(3)) ;
+                
+                hdot  <= u(5) * h + u(3);
+                u(5)  <= 0.0;
+                B       = 1 / (h - 0.3);
+                Bdot    = - hdot / (h - 0.3)^2;
+                Bdot    <= 1.0/B;
+                z        = x(3) - atan(k1 *(atan2((x(1)*sin(x(2)) - b_y), (-x(1) * cos(x(2)) - b_x)) ));
+                zdot     = u(1)/ x(1) * sin(k1 * x(3)) + u(2);
+                z * zdot <= -0.5 * k2 * z^2 + u(4);
+            else
+                z        = x(3) - atan(-k1 * x(2));
+                zdot     = ((1 + 1/ (1 + x(2)^2) ) * u(1) / x(1) * sin(z + atan(-k1 * x(2))) + u(2));
+                
+                z * zdot <= -0.5 * k2 * z^2 + u(4);
+                u(5) == 0;
+            end
+            %u(5) <= 0.0;
             
-            % Barrier function candidate:
-            % Measurement z = sqrt(r^2 + ro^2 - 2 * r * ro * cos(t - to) )
-            % zdot = (1/z) * rdot * (r - cos(t-to)*ro) + (1/z) * tdot * (r * ro * sin(t - to))
-            % Barrier
-            % B(x,z) = 1 / (z - 0.5)
-            % Bdot   = - zdot / (z - 0.5)^2
-            
-%             h    = x(1);
-%             hdot = (1/h) * -1 * u(1) * cos(x(3)) *x(1); 
-%             B    = 1 / (x(1) - 2.0);
-%             Bdot = - hdot / (h - 2.0)^2;
-%             
-%             Bdot <= 1/B;
+            -1.0 <= u(2) <= 1.0;
+            0.0  <= u(1) <= 2.0;
 cvx_end
+toc();
 
 % Fixed control works
 % u(1)= x(1);
@@ -119,9 +137,9 @@ if size(U1,1) > 1
 end
 
 %% Propogate with dynamics
-x(1) = x(1) - dT * u(1) * cos(x(3));
-x(2) = x(2) + dT * u(1)/x(1) * sin(x(3));
-x(3) = x(3) + dT * u(1)/x(1) * sin(x(3)) + u(2);
+x(1) = x(1) - dT * u(1) * cos(x(3)); % + 0.5 * (u(1)/x(1) * sin(x(3))) + u(2));
+x(2) = x(2) + dT * u(1)/x(1) * sin(x(3)); % + 0.5 * (u(1)/x(1) * sin(x(3))) + u(2));
+x(3) = x(3) + dT * (u(1)/x(1) * sin(x(3)) + u(2))  ;
 x(3) = wrapToPi(x(3));
 x(2) = wrapToPi(x(2));
 
@@ -145,14 +163,15 @@ end
 
 %% Generate plots
 hold on;
-figure(1); plot(X,Y); title('Trajectory')
+figure(1); plot(X,Y); title('Trajectory'); plot(b_x,b_y, 'o')
 figure(2); plot(NX, NY);
 % figure(2); plot(R); title('Distance to go')
 % figure(3); plot(Theta); title('Theta')
 % figure(4); plot(delta); title('Delta')
 figure(5); plot(U1); title('U1')
 figure(6); plot(U2); title('U2')
-% figure(7); plot(Slk); title('Slk')
-end
+figure(7); plot(Slk); title('Slk')
+figure(8); plot(Slk2); title('Slk2');
+%end
 
 warning on;
